@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hub Manifest — CDSS Distribution</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#101a14;
+    --paper:#f6f4ee;
+    --paper-dim:#eeeadf;
+    --line:#c9c2ab;
+    --brass:#9c7a3c;
+    --brass-deep:#6f5726;
+    --stamp:#8a2e2e;
+    --ok:#3c6e47;
+    --mono: 'JetBrains Mono','Courier New',monospace;
+    --serif: 'Iowan Old Style','Georgia',serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      linear-gradient(var(--paper-dim) 1px, transparent 1px) 0 0/100% 28px,
+      var(--paper);
+    color:var(--ink);
+    font-family: var(--mono);
+    min-height:100vh;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 28px 80px;}
+
+  header{
+    display:flex;justify-content:space-between;align-items:flex-end;
+    border-bottom:3px double var(--ink);
+    padding-bottom:14px;margin-bottom:6px;
+  }
+  .title{
+    font-family:var(--serif);
+    font-size:34px;
+    letter-spacing:0.5px;
+  }
+  .title small{
+    display:block;font-family:var(--mono);font-size:11px;letter-spacing:3px;
+    text-transform:uppercase;color:var(--brass-deep);margin-bottom:6px;
+  }
+  .docid{
+    text-align:right;font-size:11px;color:#5b5646;line-height:1.6;
+  }
+  .docid b{color:var(--ink);}
+
+  /* upload */
+  #dropzone{
+    margin-top:26px;border:1.5px dashed var(--brass);
+    padding:26px;text-align:center;background:rgba(156,122,60,0.05);
+    cursor:pointer;transition:background .15s, border-color .15s;
+  }
+  #dropzone.drag{background:rgba(156,122,60,0.14);border-color:var(--brass-deep);}
+  #dropzone .hint{font-size:12px;color:#6b6656;margin-top:6px;}
+  #dropzone .big{font-family:var(--serif);font-size:18px;}
+  #fileInput{display:none;}
+
+  #app{display:none;}
+
+  /* national strip */
+  .national{
+    margin-top:34px;
+    display:grid;grid-template-columns:repeat(4,1fr);
+    border:1px solid var(--ink);
+  }
+  .national div{
+    padding:16px 18px;border-right:1px solid var(--ink);
+  }
+  .national div:last-child{border-right:none;}
+  .national .k{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#6b6656;}
+  .national .v{font-family:var(--serif);font-size:26px;margin-top:6px;}
+  .national .v.stamp{color:var(--stamp);}
+
+  .controls{
+    margin-top:22px;display:flex;gap:14px;align-items:center;
+    flex-wrap:wrap;
+  }
+  .controls input[type=text]{
+    font-family:var(--mono);font-size:13px;padding:9px 12px;
+    border:1px solid var(--ink);background:var(--paper);flex:1;min-width:220px;
+  }
+  .controls select{
+    font-family:var(--mono);font-size:12px;padding:9px 10px;
+    border:1px solid var(--ink);background:var(--paper);
+  }
+  .controls .count{font-size:11px;color:#6b6656;white-space:nowrap;}
+
+  /* hub ledger */
+  .hub{
+    margin-top:22px;border:1px solid var(--ink);background:var(--paper);
+  }
+  .hub-head{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:14px 18px;cursor:pointer;background:var(--paper-dim);
+    border-bottom:1px solid var(--ink);
+  }
+  .hub-head:hover{background:#e6e0cf;}
+  .hub-name{font-family:var(--serif);font-size:19px;}
+  .hub-name .seq{color:var(--brass-deep);font-family:var(--mono);font-size:12px;margin-right:10px;}
+  .hub-stats{display:flex;gap:26px;align-items:baseline;}
+  .hub-stats .k{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:#6b6656;}
+  .hub-stats .v{font-size:16px;}
+  .hub-stats .v.val{color:var(--stamp);font-weight:bold;}
+  .chev{font-size:14px;color:var(--brass-deep);margin-left:16px;transition:transform .15s;}
+  .hub.open .chev{transform:rotate(90deg);}
+
+  .hub-body{display:none;padding:0;}
+  .hub.open .hub-body{display:block;}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  thead th{
+    text-align:left;padding:9px 14px;font-size:10px;letter-spacing:1px;
+    text-transform:uppercase;color:#6b6656;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--paper);
+  }
+  tbody td{padding:8px 14px;border-bottom:1px solid var(--line);}
+  tbody tr:hover{background:rgba(156,122,60,0.06);}
+  td.num, th.num{text-align:right;font-variant-numeric:tabular-nums;}
+  td.cat{color:var(--brass-deep);font-size:11px;}
+
+  footer{
+    margin-top:40px;border-top:1px solid var(--line);padding-top:14px;
+    font-size:11px;color:#6b6656;display:flex;justify-content:space-between;
+  }
+
+  .empty{padding:40px;text-align:center;color:#6b6656;font-family:var(--serif);font-size:16px;}
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 900px){
+    .national{grid-template-columns:repeat(2,1fr);}
+    .national div:nth-child(2){border-right:none;}
+    .national div{padding:14px;}
+    .national .v{font-size:22px;}
+  }
+
+  @media (max-width: 640px){
+    .wrap{padding:20px 14px 60px;}
+    header{flex-direction:column;align-items:flex-start;gap:10px;}
+    .title{font-size:26px;}
+    .docid{text-align:left;}
+
+    #dropzone{padding:20px 14px;}
+    #dropzone .big{font-size:15px;}
+
+    .national{grid-template-columns:1fr 1fr;}
+    .national div{border-right:1px solid var(--ink);border-bottom:1px solid var(--ink);}
+    .national div:nth-child(2n){border-right:none;}
+    .national div:nth-last-child(-n+2){border-bottom:none;}
+
+    .controls{flex-direction:column;align-items:stretch;}
+    .controls select, .controls input[type=text]{width:100%;}
+
+    .hub-head{flex-direction:column;align-items:flex-start;gap:10px;}
+    .hub-stats{width:100%;justify-content:space-between;gap:10px;}
+    .chev{position:absolute;top:14px;right:16px;}
+    .hub-head{position:relative;padding-right:40px;}
+
+    /* card-style rows instead of a wide table */
+    table, thead, tbody, tr, td, th{display:block;}
+    thead{display:none;}
+    tbody tr{
+      border-bottom:1px solid var(--line);
+      padding:10px 14px;
+    }
+    tbody td{
+      border-bottom:none;padding:2px 0;text-align:left;
+      display:flex;justify-content:space-between;gap:10px;
+    }
+    tbody td.num, tbody td.cat{text-align:right;}
+    tbody td:first-child{
+      font-weight:bold;display:block;text-align:left;padding-bottom:4px;
+    }
+    tbody td:not(:first-child)::before{
+      content:attr(data-label);color:#6b6656;font-size:10px;
+      text-transform:uppercase;letter-spacing:1px;
+    }
+  }
+
+  @media (max-width: 380px){
+    .national{grid-template-columns:1fr;}
+    .national div:nth-child(2n){border-right:1px solid var(--ink);}
+    .national div:nth-last-child(-n+2){border-bottom:1px solid var(--ink);}
+    .national div:last-child{border-bottom:none;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="title"><small>Central Drug Stock Supply · National Distribution</small>Hub Manifest</div>
+    <div class="docid">Generated client-side<br><b id="genTime">—</b></div>
+  </header>
+
+  <div id="dropzone">
+    <div class="big">Drop the CDSS forecast workbook here, or click to browse</div>
+    <div class="hint">.xlsx — parsed entirely in your browser. Nothing is uploaded anywhere. Hub-level only; facility rows are rolled up.</div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+  </div>
+
+  <div id="app">
+    <div class="national" id="nationalStrip"></div>
+
+    <div class="controls">
+      <input type="text" id="search" placeholder="Filter by hub or product name…">
+      <select id="sortSel">
+        <option value="value-desc">Sort hubs: value ↓</option>
+        <option value="value-asc">Sort hubs: value ↑</option>
+        <option value="qty-desc">Sort hubs: quantity ↓</option>
+        <option value="name-asc">Sort hubs: name A–Z</option>
+      </select>
+      <span class="count" id="hubCount"></span>
+    </div>
+
+    <div id="hubList"></div>
+
+    <footer>
+      <span>Values aggregate <b>CommittedQuantity</b> / <b>CommittedValue</b> across all facilities within each hub.</span>
+      <span id="srcFile"></span>
+    </footer>
+  </div>
+
+</div>
+
+<script>
+let RAW = [];       // flat rows
+let HUBS = {};      // hub -> { qty, val, itemsMap: {productName -> {qty,val,unit,category,unitPrice}} }
+let currency = 'ETB';
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+
+dropzone.addEventListener('click', () => fileInput.click());
+['dragenter','dragover'].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add('drag'); }));
+['dragleave','drop'].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+dropzone.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+fileInput.addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (f) handleFile(f);
+});
+
+function handleFile(file){
+  document.getElementById('srcFile').textContent = 'Source: ' + file.name;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const wb = XLSX.read(e.target.result, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+    RAW = rows;
+    process(rows);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function num(v){
+  if (v === null || v === undefined || v === '') return 0;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g,''));
+  return isNaN(n) ? 0 : n;
+}
+
+// Normalize a header string for loose matching: lowercase, strip spaces/underscores/punctuation
+function normKey(s){
+  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Accepted aliases per logical field (checked in order, first match wins)
+const FIELD_ALIASES = {
+  hub:      ['hub', 'hubname', 'branch', 'distributionhub'],
+  product:  ['productname', 'product', 'itemname', 'item', 'drugname'],
+  category: ['category', 'productcategory', 'itemcategory'],
+  unit:     ['unit', 'uom', 'unitofmeasure'],
+  unitPrice:['unitprice', 'price', 'uprice'],
+  qty:      ['committedquantity', 'quantity', 'qty', 'committedqty'],
+  val:      ['committedvalue', 'value', 'committedval', 'totalvalue']
+};
+
+// Given the actual header row keys, build a map: logical field -> actual key used in the row objects
+function buildFieldMap(sampleRow){
+  const actualKeys = Object.keys(sampleRow || {});
+  const normToActual = {};
+  actualKeys.forEach(k => { normToActual[normKey(k)] = k; });
+
+  const map = {};
+  const missing = [];
+  Object.entries(FIELD_ALIASES).forEach(([field, aliases]) => {
+    const found = aliases.map(normKey).find(a => normToActual[a] !== undefined);
+    if (found) map[field] = normToActual[found];
+    else missing.push(field);
+  });
+  return { map, missing };
+}
+
+function getVal(row, map, field, fallback){
+  const key = map[field];
+  return key ? row[key] : fallback;
+}
+
+function process(rows){
+  HUBS = {};
+  let totalVal = 0, totalQty = 0, productSet = new Set();
+
+  if (!rows.length){
+    showWarning('The sheet has no data rows.');
+    return;
+  }
+
+  const { map, missing } = buildFieldMap(rows[0]);
+
+  if (missing.includes('hub') || missing.includes('product')) {
+    showWarning('Could not find a "Hub" and/or "ProductName" column in this file. ' +
+      'Detected columns: ' + Object.keys(rows[0]).join(', ') +
+      '. Rename the relevant header(s) and re-upload.');
+    return;
+  }
+  if (missing.length){
+    console.warn('Missing optional columns, defaulting to blank/0:', missing);
+  }
+
+  rows.forEach(r => {
+    const hub = getVal(r, map, 'hub', null) || 'Unassigned Hub';
+    const product = getVal(r, map, 'product', null) || 'Unnamed item';
+    const qty = num(getVal(r, map, 'qty', 0));
+    const val = num(getVal(r, map, 'val', 0));
+    const unit = getVal(r, map, 'unit', '') || '';
+    const category = getVal(r, map, 'category', '') || '';
+    const unitPrice = num(getVal(r, map, 'unitPrice', 0));
+
+    if (!HUBS[hub]) HUBS[hub] = { qty:0, val:0, items:{} };
+    HUBS[hub].qty += qty;
+    HUBS[hub].val += val;
+
+    if (!HUBS[hub].items[product]) {
+      HUBS[hub].items[product] = { qty:0, val:0, unit, category, unitPrice };
+    }
+    HUBS[hub].items[product].qty += qty;
+    HUBS[hub].items[product].val += val;
+
+    totalVal += val;
+    totalQty += qty;
+    productSet.add(product);
+  });
+
+  renderNational(totalVal, totalQty, Object.keys(HUBS).length, productSet.size);
+  renderHubs();
+
+  const box = document.getElementById('warnBox');
+  if (box) box.remove();
+
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('genTime').textContent = new Date().toLocaleString();
+}
+
+function showWarning(msg){
+  document.getElementById('app').style.display = 'none';
+  let box = document.getElementById('warnBox');
+  if (!box){
+    box = document.createElement('div');
+    box.id = 'warnBox';
+    box.style.cssText = 'margin-top:18px;border:1px solid var(--stamp);background:rgba(138,46,46,0.06);padding:16px 18px;font-size:13px;color:var(--stamp);';
+    dropzone.insertAdjacentElement('afterend', box);
+  }
+  box.textContent = msg;
+}
+
+function fmtMoney(v){
+  return currency + ' ' + v.toLocaleString(undefined, {maximumFractionDigits:0});
+}
+function fmtNum(v){
+  return v.toLocaleString(undefined, {maximumFractionDigits:2});
+}
+
+function renderNational(val, qty, hubCount, productCount){
+  const strip = document.getElementById('nationalStrip');
+  strip.innerHTML = `
+    <div><div class="k">National committed value</div><div class="v stamp">${fmtMoney(val)}</div></div>
+    <div><div class="k">National committed quantity</div><div class="v">${fmtNum(qty)}</div></div>
+    <div><div class="k">Hubs reporting</div><div class="v">${hubCount}</div></div>
+    <div><div class="k">Distinct items</div><div class="v">${productCount}</div></div>
+  `;
+}
+
+function getSortedHubNames(){
+  const sortSel = document.getElementById('sortSel').value;
+  let names = Object.keys(HUBS);
+  if (sortSel === 'value-desc') names.sort((a,b) => HUBS[b].val - HUBS[a].val);
+  else if (sortSel === 'value-asc') names.sort((a,b) => HUBS[a].val - HUBS[b].val);
+  else if (sortSel === 'qty-desc') names.sort((a,b) => HUBS[b].qty - HUBS[a].qty);
+  else if (sortSel === 'name-asc') names.sort((a,b) => a.localeCompare(b));
+  return names;
+}
+
+function renderHubs(){
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const list = document.getElementById('hubList');
+  const names = getSortedHubNames();
+
+  let visibleCount = 0;
+  let html = '';
+
+  names.forEach((hub, idx) => {
+    const hubData = HUBS[hub];
+    const hubMatches = hub.toLowerCase().includes(q);
+    const itemEntries = Object.entries(hubData.items)
+      .filter(([name]) => !q || hubMatches || name.toLowerCase().includes(q))
+      .sort((a,b) => b[1].val - a[1].val);
+
+    if (q && !hubMatches && itemEntries.length === 0) return;
+    visibleCount++;
+
+    const rows = itemEntries.map(([name, d]) => `
+      <tr>
+        <td>${escapeHtml(name)}</td>
+        <td class="cat" data-label="Category">${escapeHtml(d.category)}</td>
+        <td data-label="Unit">${escapeHtml(d.unit)}</td>
+        <td class="num" data-label="Quantity">${fmtNum(d.qty)}</td>
+        <td class="num" data-label="Unit price">${fmtMoney(d.unitPrice)}</td>
+        <td class="num" data-label="Value">${fmtMoney(d.val)}</td>
+      </tr>
+    `).join('');
+
+    html += `
+      <div class="hub" data-idx="${idx}">
+        <div class="hub-head" onclick="toggleHub(${idx})">
+          <div class="hub-name"><span class="seq">${String(idx+1).padStart(2,'0')}</span>${escapeHtml(hub)}</div>
+          <div class="hub-stats">
+            <div><div class="k">Items</div><div class="v">${itemEntries.length}</div></div>
+            <div><div class="k">Quantity</div><div class="v">${fmtNum(hubData.qty)}</div></div>
+            <div><div class="k">Value</div><div class="v val">${fmtMoney(hubData.val)}</div></div>
+            <span class="chev">▶</span>
+          </div>
+        </div>
+        <div class="hub-body">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th><th>Category</th><th>Unit</th>
+                <th class="num">Quantity</th><th class="num">Unit price</th><th class="num">Value</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  });
+
+  list.innerHTML = html || '<div class="empty">No hubs match that filter.</div>';
+  document.getElementById('hubCount').textContent = visibleCount + ' hub' + (visibleCount===1?'':'s') + ' shown';
+}
+
+function toggleHub(idx){
+  const el = document.querySelector(`.hub[data-idx="${idx}"]`);
+  el.classList.toggle('open');
+}
+
+function escapeHtml(s){
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('search').addEventListener('input', renderHubs);
+document.getElementById('sortSel').addEventListener('change', renderHubs);
+</script>
+</body>
+</html>
