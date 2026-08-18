@@ -4,6 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hub Manifest — CDSS Distribution</title>
+<script>
+window.addEventListener('error', function(e){
+  var el = document.getElementById('jsErrorBanner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'jsErrorBanner';
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#8a2e2e;color:#fff;padding:10px 16px;font:12px monospace;z-index:9999;';
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  el.textContent = 'Script error: ' + e.message + ' (line ' + e.lineno + ') — the tool may not work. Try a different/updated browser.';
+});
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
@@ -247,18 +259,56 @@ dropzone.addEventListener('drop', e => {
 fileInput.addEventListener('change', e => {
   const f = e.target.files[0];
   if (f) handleFile(f);
+  fileInput.value = ''; // allow re-selecting the same file later
 });
 
 function handleFile(file){
   document.getElementById('srcFile').textContent = 'Source: ' + file.name;
+  const box = document.getElementById('warnBox');
+  if (box) box.remove();
+
   const reader = new FileReader();
-  reader.onload = e => {
-    const wb = XLSX.read(e.target.result, { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
-    RAW = rows;
-    process(rows);
+
+  reader.onerror = () => {
+    showWarning('Could not read that file. Try re-saving it as .xlsx and uploading again.');
   };
+
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+
+      if (!wb.SheetNames || !wb.SheetNames.length) {
+        showWarning('No sheets found in this workbook.');
+        return;
+      }
+
+      // Pick the sheet with the most data rows, not just the first tab
+      // (avoids picking an empty/placeholder tab if one exists before the real data)
+      let bestRows = [];
+      let bestSheetName = wb.SheetNames[0];
+      wb.SheetNames.forEach(name => {
+        const ws = wb.Sheets[name];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+        if (rows.length > bestRows.length) {
+          bestRows = rows;
+          bestSheetName = name;
+        }
+      });
+
+      if (!bestRows.length) {
+        showWarning('Found ' + wb.SheetNames.length + ' sheet(s) but none had readable data rows below the header.');
+        return;
+      }
+
+      console.log('Using sheet:', bestSheetName, '— rows:', bestRows.length);
+      RAW = bestRows;
+      process(bestRows);
+    } catch (err) {
+      console.error(err);
+      showWarning('Could not parse this file as an Excel workbook (' + err.message + '). Make sure it is a real .xlsx/.xls file, not renamed CSV.');
+    }
+  };
+
   reader.readAsArrayBuffer(file);
 }
 
@@ -270,7 +320,7 @@ function num(v){
 
 // Normalize a header string for loose matching: lowercase, strip spaces/underscores/punctuation
 function normKey(s){
-  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return String(s === null || s === undefined ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 // Accepted aliases per logical field (checked in order, first match wins)
@@ -464,7 +514,7 @@ function toggleHub(idx){
 }
 
 function escapeHtml(s){
-  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; });
 }
 
 document.getElementById('search').addEventListener('input', renderHubs);
