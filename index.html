@@ -68,9 +68,18 @@ window.addEventListener('error', function(e){
     cursor:pointer;transition:background .15s, border-color .15s;
   }
   #dropzone.drag{background:rgba(156,122,60,0.14);border-color:var(--brass-deep);}
+  #dropzone.busy{cursor:wait;border-style:solid;}
   #dropzone .hint{font-size:12px;color:#6b6656;margin-top:6px;}
   #dropzone .big{font-family:var(--serif);font-size:18px;}
   #fileInput{display:none;}
+
+  .spinner{
+    display:inline-block;width:14px;height:14px;margin-right:8px;
+    border:2px solid var(--line);border-top-color:var(--brass-deep);
+    border-radius:50%;vertical-align:-2px;
+    animation:spin .8s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
 
   #app{display:none;}
 
@@ -210,8 +219,8 @@ window.addEventListener('error', function(e){
   </header>
 
   <div id="dropzone">
-    <div class="big">Drop the CDSS forecast workbook here, or click to browse</div>
-    <div class="hint">.xlsx — parsed entirely in your browser. Nothing is uploaded anywhere. Hub-level only; facility rows are rolled up.</div>
+    <div class="big" id="dzText">Drop the CDSS forecast workbook here, or click to browse</div>
+    <div class="hint" id="dzHint">.xlsx — parsed entirely in your browser. Nothing is uploaded anywhere. Hub-level only; facility rows are rolled up.</div>
     <input type="file" id="fileInput" accept=".xlsx,.xls">
   </div>
 
@@ -240,7 +249,6 @@ window.addEventListener('error', function(e){
 </div>
 
 <script>
-let RAW = [];       // flat rows
 let HUBS = {};      // hub -> { qty, val, itemsMap: {productName -> {qty,val,unit,category,unitPrice}} }
 let currency = 'ETB';
 
@@ -262,54 +270,178 @@ fileInput.addEventListener('change', e => {
   fileInput.value = ''; // allow re-selecting the same file later
 });
 
+function setBusy(isBusy, msg){
+  const dz = document.getElementById('dropzone');
+  const txt = document.getElementById('dzText');
+  const hint = document.getElementById('dzHint');
+  if (isBusy){
+    dz.classList.add('busy');
+    txt.innerHTML = '<span class="spinner"></span>' + msg;
+    hint.textContent = 'Large workbooks (500k+ rows) can take up to a minute. Please keep this tab open.';
+  } else {
+    dz.classList.remove('busy');
+    txt.textContent = 'Drop the CDSS forecast workbook here, or click to browse';
+    hint.textContent = '.xlsx — parsed entirely in your browser. Nothing is uploaded anywhere. Hub-level only; facility rows are rolled up.';
+  }
+}
+
 function handleFile(file){
   document.getElementById('srcFile').textContent = 'Source: ' + file.name;
   const box = document.getElementById('warnBox');
   if (box) box.remove();
+  document.getElementById('app').style.display = 'none';
 
   const reader = new FileReader();
 
   reader.onerror = () => {
+    setBusy(false);
     showWarning('Could not read that file. Try re-saving it as .xlsx and uploading again.');
   };
 
+  setBusy(true, 'Reading file…');
+
   reader.onload = e => {
-    try {
-      const wb = XLSX.read(e.target.result, { type: 'array' });
-
-      if (!wb.SheetNames || !wb.SheetNames.length) {
-        showWarning('No sheets found in this workbook.');
-        return;
-      }
-
-      // Pick the sheet with the most data rows, not just the first tab
-      // (avoids picking an empty/placeholder tab if one exists before the real data)
-      let bestRows = [];
-      let bestSheetName = wb.SheetNames[0];
-      wb.SheetNames.forEach(name => {
-        const ws = wb.Sheets[name];
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
-        if (rows.length > bestRows.length) {
-          bestRows = rows;
-          bestSheetName = name;
-        }
-      });
-
-      if (!bestRows.length) {
-        showWarning('Found ' + wb.SheetNames.length + ' sheet(s) but none had readable data rows below the header.');
-        return;
-      }
-
-      console.log('Using sheet:', bestSheetName, '— rows:', bestRows.length);
-      RAW = bestRows;
-      process(bestRows);
-    } catch (err) {
-      console.error(err);
-      showWarning('Could not parse this file as an Excel workbook (' + err.message + '). Make sure it is a real .xlsx/.xls file, not renamed CSV.');
-    }
+    const buf = e.target.result;
+    // Defer heavy synchronous parsing one tick so the "busy" state actually paints
+    // before the main thread gets blocked by XLSX parsing.
+    setTimeout(() => parseWorkbook(buf), 30);
   };
 
   reader.readAsArrayBuffer(file);
+}
+
+function parseWorkbook(buf){
+  try {
+    setBusy(true, 'Scanning sheets…');
+
+    // Cheap pass: sheet names only, no cell parsing.
+    const nameScan = XLSX.read(buf, { type: 'array', bookSheets: true });
+    if (!nameScan.SheetNames || !nameScan.SheetNames.length) {
+      setBusy(false);
+      showWarning('No sheets found in this workbook.');
+      return;
+    }
+
+    // Pick the real data sheet using a cheap, row-capped preview per sheet
+    // (avoids fully parsing large decoy/placeholder tabs just to compare row counts).
+    let bestSheet = nameScan.SheetNames[0];
+    if (nameScan.SheetNames.length > 1) {
+      let bestScore = -1;
+      nameScan.SheetNames.forEach(name => {
+        try {
+          const preview = XLSX.read(buf, { type: 'array', sheets: [name], sheetRows: 5, dense: true });
+          const ws = preview.Sheets[name];
+          const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+          const headerCols = (aoa[0] || []).filter(c => c !== null && c !== '').length;
+          const hasDataRow = aoa.length > 1;
+          const score = headerCols * (hasDataRow ? 1 : 0);
+          if (score > bestScore) { bestScore = score; bestSheet = name; }
+        } catch (err) {
+          console.warn('Preview failed for sheet', name, err);
+        }
+      });
+    }
+
+    setBusy(true, 'Parsing ' + bestSheet + '…');
+
+    // Full parse of only the selected sheet, in dense mode — this is dramatically
+    // lighter on memory/time than the default sparse cell-object storage for
+    // workbooks with hundreds of thousands of rows.
+    const wb = XLSX.read(buf, { type: 'array', dense: true, sheets: [bestSheet] });
+    const ws = wb.Sheets[bestSheet];
+    if (!ws) {
+      setBusy(false);
+      showWarning('Could not read sheet "' + bestSheet + '" from this workbook.');
+      return;
+    }
+
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+    if (!aoa.length) {
+      setBusy(false);
+      showWarning('Found ' + nameScan.SheetNames.length + ' sheet(s) but none had readable data rows below the header.');
+      return;
+    }
+
+    setBusy(true, 'Aggregating ' + (aoa.length - 1).toLocaleString() + ' rows…');
+    setTimeout(() => aggregateRows(aoa, bestSheet), 30);
+
+  } catch (err) {
+    console.error(err);
+    setBusy(false);
+    showWarning('Could not parse this file as an Excel workbook (' + err.message + '). Make sure it is a real .xlsx/.xls file, not renamed CSV.');
+  }
+}
+
+function aggregateRows(aoa, sheetName){
+  try {
+    const header = aoa[0];
+    const normToIdx = {};
+    header.forEach((h, i) => { normToIdx[normKey(h)] = i; });
+
+    const colIdx = {};
+    const missing = [];
+    Object.entries(FIELD_ALIASES).forEach(([field, aliases]) => {
+      const found = aliases.map(normKey).find(a => normToIdx[a] !== undefined);
+      if (found !== undefined) colIdx[field] = normToIdx[found];
+      else missing.push(field);
+    });
+
+    if (missing.includes('hub') || missing.includes('product')) {
+      setBusy(false);
+      showWarning('Could not find a "Hub" and/or "ProductName" column in this file. ' +
+        'Detected columns: ' + header.join(', ') +
+        '. Rename the relevant header(s) and re-upload.');
+      return;
+    }
+    if (missing.length){
+      console.warn('Missing optional columns, defaulting to blank/0:', missing);
+    }
+
+    HUBS = {};
+    let totalVal = 0, totalQty = 0;
+    const productSet = new Set();
+
+    for (let i = 1; i < aoa.length; i++){
+      const row = aoa[i];
+      if (!row) continue;
+      const hub = row[colIdx.hub] || 'Unassigned Hub';
+      const product = row[colIdx.product] || 'Unnamed item';
+      const qty = num(colIdx.qty !== undefined ? row[colIdx.qty] : 0);
+      const val = num(colIdx.val !== undefined ? row[colIdx.val] : 0);
+      const unit = (colIdx.unit !== undefined ? row[colIdx.unit] : '') || '';
+      const category = (colIdx.category !== undefined ? row[colIdx.category] : '') || '';
+      const unitPrice = num(colIdx.unitPrice !== undefined ? row[colIdx.unitPrice] : 0);
+
+      if (!HUBS[hub]) HUBS[hub] = { qty:0, val:0, items:{} };
+      HUBS[hub].qty += qty;
+      HUBS[hub].val += val;
+
+      if (!HUBS[hub].items[product]) {
+        HUBS[hub].items[product] = { qty:0, val:0, unit, category, unitPrice };
+      }
+      HUBS[hub].items[product].qty += qty;
+      HUBS[hub].items[product].val += val;
+
+      totalVal += val;
+      totalQty += qty;
+      productSet.add(product);
+    }
+
+    renderNational(totalVal, totalQty, Object.keys(HUBS).length, productSet.size);
+    renderHubs();
+
+    const box = document.getElementById('warnBox');
+    if (box) box.remove();
+
+    setBusy(false);
+    document.getElementById('app').style.display = 'block';
+    document.getElementById('genTime').textContent = new Date().toLocaleString();
+    console.log('Parsed sheet:', sheetName, '— data rows:', aoa.length - 1);
+  } catch (err) {
+    console.error(err);
+    setBusy(false);
+    showWarning('Something went wrong while aggregating this file (' + err.message + '). Please try again or use a smaller export.');
+  }
 }
 
 function num(v){
@@ -334,83 +466,8 @@ const FIELD_ALIASES = {
   val:      ['committedvalue', 'value', 'committedval', 'totalvalue']
 };
 
-// Given the actual header row keys, build a map: logical field -> actual key used in the row objects
-function buildFieldMap(sampleRow){
-  const actualKeys = Object.keys(sampleRow || {});
-  const normToActual = {};
-  actualKeys.forEach(k => { normToActual[normKey(k)] = k; });
-
-  const map = {};
-  const missing = [];
-  Object.entries(FIELD_ALIASES).forEach(([field, aliases]) => {
-    const found = aliases.map(normKey).find(a => normToActual[a] !== undefined);
-    if (found) map[field] = normToActual[found];
-    else missing.push(field);
-  });
-  return { map, missing };
-}
-
-function getVal(row, map, field, fallback){
-  const key = map[field];
-  return key ? row[key] : fallback;
-}
-
-function process(rows){
-  HUBS = {};
-  let totalVal = 0, totalQty = 0, productSet = new Set();
-
-  if (!rows.length){
-    showWarning('The sheet has no data rows.');
-    return;
-  }
-
-  const { map, missing } = buildFieldMap(rows[0]);
-
-  if (missing.includes('hub') || missing.includes('product')) {
-    showWarning('Could not find a "Hub" and/or "ProductName" column in this file. ' +
-      'Detected columns: ' + Object.keys(rows[0]).join(', ') +
-      '. Rename the relevant header(s) and re-upload.');
-    return;
-  }
-  if (missing.length){
-    console.warn('Missing optional columns, defaulting to blank/0:', missing);
-  }
-
-  rows.forEach(r => {
-    const hub = getVal(r, map, 'hub', null) || 'Unassigned Hub';
-    const product = getVal(r, map, 'product', null) || 'Unnamed item';
-    const qty = num(getVal(r, map, 'qty', 0));
-    const val = num(getVal(r, map, 'val', 0));
-    const unit = getVal(r, map, 'unit', '') || '';
-    const category = getVal(r, map, 'category', '') || '';
-    const unitPrice = num(getVal(r, map, 'unitPrice', 0));
-
-    if (!HUBS[hub]) HUBS[hub] = { qty:0, val:0, items:{} };
-    HUBS[hub].qty += qty;
-    HUBS[hub].val += val;
-
-    if (!HUBS[hub].items[product]) {
-      HUBS[hub].items[product] = { qty:0, val:0, unit, category, unitPrice };
-    }
-    HUBS[hub].items[product].qty += qty;
-    HUBS[hub].items[product].val += val;
-
-    totalVal += val;
-    totalQty += qty;
-    productSet.add(product);
-  });
-
-  renderNational(totalVal, totalQty, Object.keys(HUBS).length, productSet.size);
-  renderHubs();
-
-  const box = document.getElementById('warnBox');
-  if (box) box.remove();
-
-  document.getElementById('app').style.display = 'block';
-  document.getElementById('genTime').textContent = new Date().toLocaleString();
-}
-
 function showWarning(msg){
+  setBusy(false);
   document.getElementById('app').style.display = 'none';
   let box = document.getElementById('warnBox');
   if (!box){
